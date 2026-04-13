@@ -2,13 +2,11 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "dockerfile",
-    "dockerfile": "Dockerfile"
+    "dockerfile": "./Dockerfile"
   },
   "deploy": {
-    "numReplicas": 1,
     "startCommand": "streamlit run streamlit_app.py",
-    "healthcheckPath": "/health",
-    "healthcheckTimeout": 30
+    "restartPolicyMaxRetries": 5
   },
   "variables": {
     "STREAMLIT_SERVER_HEADLESS": "true",
