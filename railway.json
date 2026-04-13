@@ -7,8 +7,5 @@
   "deploy": {
     "startCommand": "python backend_server.py",
     "restartPolicyMaxRetries": 5
-  },
-  "variables": {
-    "PYTHONUNBUFFERED": "1"
   }
 }
