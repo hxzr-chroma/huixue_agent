@@ -1,15 +1,18 @@
-FROM python:3.13-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
 # 复制依赖文件
-COPY huixue_agent/requirements.txt .
+COPY requirements.txt .
 
 # 安装依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制应用代码
-COPY huixue_agent/ .
+COPY . .
+
+# 创建Streamlit配置目录
+RUN mkdir -p ~/.streamlit
 
 # 暴露端口
 EXPOSE 8501
@@ -20,4 +23,4 @@ ENV STREAMLIT_SERVER_PORT=8501
 ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
 # 启动应用
-CMD ["streamlit", "run", "app.py"]
+CMD ["streamlit", "run", "streamlit_app.py"]
