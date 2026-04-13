@@ -45,11 +45,20 @@ st.set_page_config(
 )
 
 API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+
+# 后端 URL 配置：优先级 1. 环境变量 2. 开发环境的 localhost
+# 在 Railway 上应该通过环境变量设置为其他服务的 URL
 BACKEND_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 # 如果是在 Railway 上且没有 .env 文件，尝试从直接环境变量读取
 if not API_KEY:
     API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+
+# 同样尝试从环境变量读后端 URL
+if BACKEND_URL == "http://localhost:8000":
+    railway_backend = os.environ.get("API_BASE_URL") or os.environ.get("BACKEND_URL")
+    if railway_backend:
+        BACKEND_URL = railway_backend
 
 # ============================================================================
 # 会话状态初始化
@@ -74,14 +83,27 @@ def api_request(method: str, endpoint: str, data: dict = None, headers: dict = N
     url = f"{BACKEND_URL}{endpoint}"
     try:
         if method == "POST":
-            response = requests.post(url, json=data, headers=headers or {})
+            response = requests.post(url, json=data, headers=headers or {}, timeout=10)
         elif method == "GET":
-            response = requests.get(url, headers=headers or {})
+            response = requests.get(url, headers=headers or {}, timeout=10)
         else:
             return {"error": f"不支持的方法: {method}"}
-        return response.json() if response.status_code < 300 else {"error": response.text}
+        
+        if response.status_code < 300:
+            return response.json()
+        else:
+            error_text = response.text[:200]
+            return {"error": f"服务错误 ({response.status_code}): {error_text}"}
+    except requests.ConnectionError as e:
+        return {
+            "error": f"❌ 无法连接到后端服务\n\nBackend URL: {BACKEND_URL}\n\n"
+                    f"如果在 Railway 上部署，请在 Variables 中设置 API_BASE_URL 为你的后端服务 URL（例如 https://xxx-backend.railway.app）"
+        }
+    except requests.Timeout:
+        return {"error": "后端服务响应超时（10秒）"}
     except Exception as e:
-        return {"error": f"请求失败: {str(e)}"}
+        error_msg = str(e)[:100]
+        return {"error": f"请求失败: {error_msg}"}
 
 def register_user(username: str, email: str, password: str, password_confirm: str):
     """注册新用户"""
@@ -151,7 +173,12 @@ def show_auth_page():
                         st.success(f"✅ {result.get('message')}")
                         st.rerun()
                     else:
-                        st.error(f"❌ {result.get('error', '登录失败')}")
+                        error_msg = result.get('error', '登录失败')
+                        if "无法连接" in error_msg:
+                            st.error(error_msg)
+                            st.info("💡 **提示**：\n\n如果使用本地开发，请确保后端服务 (`python backend_server.py`) 已在 localhost:8000 运行。\n\n如果在 Railway 部署，请在 Railway Variables 中配置 `API_BASE_URL`（你的后端服务 URL）")
+                        else:
+                            st.error(f"❌ {error_msg}")
         
         with tab2:
             st.subheader("用户注册")
@@ -173,7 +200,12 @@ def show_auth_page():
                         st.success(f"✅ {result.get('message')}")
                         st.rerun()
                     else:
-                        st.error(f"❌ {result.get('error', '注册失败')}")
+                        error_msg = result.get('error', '注册失败')
+                        if "无法连接" in error_msg:
+                            st.error(error_msg)
+                            st.info("💡 **提示**：\n\n如果使用本地开发，请确保后端服务 (`python backend_server.py`) 已在 localhost:8000 运行。\n\n如果在 Railway 部署，请在 Railway Variables 中配置 `API_BASE_URL`（你的后端服务 URL）")
+                        else:
+                            st.error(f"❌ {error_msg}")
 
 # 安全初始化服务，忽略LLM库初始化错误
 api_key_warning = None
