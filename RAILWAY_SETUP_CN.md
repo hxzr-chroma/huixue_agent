@@ -1,0 +1,144 @@
+# Railway 部署完整指南（中文）
+
+## 现在的问题
+
+你的应用有两部分：
+- 🖥️ **前端**：Streamlit（用户界面）- 已在 Railway 上运行
+- 🔧 **后端**：FastAPI（服务器）- 还没配置
+
+前端无法连接后端，就是因为后端还没部署。
+
+---
+
+## ✅ 解决步骤
+
+### 1️⃣ 打开 Railway 项目
+
+访问：https://railway.app
+
+登录你的账户，找到你的 `huixue_agent` 项目
+
+### 2️⃣ 查看现有的前端服务
+
+```
+你的项目
+├── huixue_agent  (当前正在运行 - 这是前端 Streamlit)
+└── [需要添加后端]
+```
+
+### 3️⃣ **添加后端服务**
+
+这是关键步骤！点击：
+
+```
++ New Service
+  ↓
+Deploy from GitHub
+  ↓
+选择 huixue_agent 仓库
+  ↓
+完成
+```
+
+现在你有两个服务了：
+```
+你的项目
+├── huixue_agent (前端 Streamlit - 8501 端口)
+└── huixue_agent (后端 FastAPI - 8000 端口)  ← 新增
+```
+
+### 4️⃣ **获取后端 URL**
+
+等后端部署完成后（看右上角 status）：
+
+1. 点击后端服务
+2. 进入 **Settings** 
+3. 找到 **Domain** 部分
+4. 会看到一个 URL，比如：`your-app-backend.railway.app`
+
+### 5️⃣ **配置前端的环境变量**
+
+1. 点击前端服务（Streamlit）
+2. 进入 **Variables** 标签页
+3. 添加或修改这两个变量：
+
+```
+变量名：DEEPSEEK_API_KEY
+值：sk-xxx...（替换成你真实的 Key）
+
+变量名：API_BASE_URL
+值：https://your-app-backend.railway.app（替换成你实际的后端 URL）
+```
+
+### 6️⃣ **重新部署前端**
+
+点击前端服务的菜单 → **Redeploy** （重新部署）
+
+---
+
+## 🎯 现在应该可以了！
+
+前端会自动连接到后端。再试试注册/登录。
+
+---
+
+## 🆘 如果还是有问题
+
+**问题 1：后端 URL 在哪里看？**
+
+答：
+1. 打开你的 Railway 项目
+2. 看左侧，应该有两个服务
+3. 点击后端服务（应该叫 `huixue_agent` 或类似的名字）
+4. 右上角应该显示绿色的 "正在运行" 和一个 URL 链接
+
+**问题 2：变量填写错了怎么办？**
+
+答：
+1. 打开前端服务 → Variables
+2. 点击变量红叉删除
+3. 重新添加正确的值
+4. 点 Save（自动保存）
+5. Redeploy 前端
+
+**问题 3：后端一直显示错误/不运行？**
+
+答：检查 Dockerfile 是否正确。应该显示：
+```
+Dockerfile found - building...
+```
+
+如果显示构建失败，联系我修复 Dockerfile。
+
+---
+
+## 📋 检查清单
+
+部署前确认：
+- [ ] 前端服务在 Railway 上运行
+- [ ] 后端服务在 Railway 上运行（显示绿色 "正在运行"）
+- [ ] 前端的 DEEPSEEK_API_KEY 已设置
+- [ ] 前端的 API_BASE_URL 已设置为后端的真实 URL
+- [ ] 前端已 Redeploy（部署完最新配置）
+
+全部 ✅ 后，打开前端 URL 试试登录！
+
+---
+
+## 常见的 URL 格式
+
+示例：
+```
+前端 URL: https://huixue-agent-frontend.railway.app
+后端 URL: https://huixue-agent-backend.railway.app
+
+API_BASE_URL 应该填：https://huixue-agent-backend.railway.app
+```
+
+**注意**：你的 URL 会不同，需要替换成你真实的。
+
+---
+
+## 总结
+
+2 个服务 + 2 个环境变量 + 1 次 Redeploy = ✅ 完成！
