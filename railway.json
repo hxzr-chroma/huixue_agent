@@ -5,12 +5,10 @@
     "dockerfile": "./Dockerfile"
   },
   "deploy": {
-    "startCommand": "streamlit run streamlit_app.py",
+    "startCommand": "python backend_server.py",
     "restartPolicyMaxRetries": 5
   },
   "variables": {
-    "STREAMLIT_SERVER_HEADLESS": "true",
-    "STREAMLIT_SERVER_ADDRESS": "0.0.0.0",
-    "STREAMLIT_SERVER_PORT": "8501"
+    "PYTHONUNBUFFERED": "1"
   }
 }
