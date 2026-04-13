@@ -20,21 +20,34 @@ class LLMClient:
         """
         # 检查API密钥
         if not api_key or api_key.strip() == "":
-            raise ValueError("API_KEY 未设置或为空")
+            # 不抛出错误，而是记录警告并继续
+            import warnings
+            warnings.warn("⚠️ DEEPSEEK_API_KEY 未设置，某些功能将不可用。请在 Railway 环境变量中设置 DEEPSEEK_API_KEY")
+            self.client = None
+            self.model = "deepseek-chat"
+            return
         
-        # 初始化OpenAI客户端（配置为DeepSeek）
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://api.deepseek.com"
-        )
-
-        # 默认模型
-        self.model = "deepseek-chat"
+        try:
+            # 初始化OpenAI客户端（配置为DeepSeek）
+            self.client = OpenAI(
+                api_key=api_key,
+                base_url="https://api.deepseek.com"
+            )
+            # 默认模型
+            self.model = "deepseek-chat"
+        except Exception as e:
+            import warnings
+            warnings.warn(f"⚠️ DeepSeek API 初始化失败: {str(e)}")
+            self.client = None
+            self.model = "deepseek-chat"
 
     def chat(self, prompt, temperature=0.7):
         """
         普通对话调用
         """
+        if self.client is None:
+            return "❌ API_KEY 未设置。请在 Railway 项目设置中添加 DEEPSEEK_API_KEY 环境变量。"
+        
         try:
             response = self.client.chat.completions.create(
                 model=self.model,

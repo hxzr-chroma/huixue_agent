@@ -47,6 +47,10 @@ st.set_page_config(
 API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 BACKEND_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
+# 如果是在 Railway 上且没有 .env 文件，尝试从直接环境变量读取
+if not API_KEY:
+    API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+
 # ============================================================================
 # 会话状态初始化
 # ============================================================================
@@ -172,11 +176,21 @@ def show_auth_page():
                         st.error(f"❌ {result.get('error', '注册失败')}")
 
 # 安全初始化服务，忽略LLM库初始化错误
+api_key_warning = None
+
+if not API_KEY or API_KEY.strip() == "":
+    api_key_warning = "⚠️ **DEEPSEEK_API_KEY 未设置**\n\n请在 Railway 项目中配置环境变量:\n1. 进入 Railway Dashboard\n2. 选择你的项目\n3. 进入 Variables 设置\n4. 添加 `DEEPSEEK_API_KEY` 变量\n5. 点击 Deploy 重新部署"
+
 try:
     service = StudyPlannerService(api_key=API_KEY)
 except Exception as e:
     # 如果初始化失败（例如OpenAI库问题），使用Mock服务
-    st.warning(f"⚠️ 服务初始化失败: {str(e)[:100]}。某些功能可能不可用。")
+    error_msg = str(e)[:150]
+    if "API_KEY" in error_msg or "未设置" in error_msg:
+        api_key_warning = "⚠️ **DEEPSEEK_API_KEY 未设置或为空**\n\n请在 Railway 项目中配置环境变量:\n1. 进入 Railway Dashboard\n2. 选择你的项目\n3. 进入 Variables 设置\n4. 添加 `DEEPSEEK_API_KEY` 变量\n5. 重新部署应用"
+    else:
+        api_key_warning = f"⚠️ 服务初始化失败: {error_msg}\n\n某些功能可能不可用。"
+    
     # 创建一个空对象来避免崩溃
     class MockRetriever:
         def chunk_count(self):
@@ -207,6 +221,8 @@ except Exception as e:
 
 if "latest_generated_evaluation" not in st.session_state:
     st.session_state.latest_generated_evaluation = None
+if "api_key_warning_shown" not in st.session_state:
+    st.session_state.api_key_warning_shown = False
 
 
 def handle_goal_clarification_flow(service: StudyPlannerService, state_key: str):
@@ -998,6 +1014,11 @@ def main():
             st.rerun()
     
     st.divider()
+    
+    # 显示 API_KEY 警告（只显示一次）
+    if api_key_warning and not st.session_state.api_key_warning_shown:
+        st.error(api_key_warning)
+        st.session_state.api_key_warning_shown = True
     
     current_plan = service.get_current_plan()
     page = render_sidebar(service, current_plan)
