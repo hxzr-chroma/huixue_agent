@@ -1,0 +1,36 @@
+From 1242b59021639ac6369d838bf811efb8e74ae979 Mon Sep 17 00:00:00 2001
+From: Your Name <your-email@example.com>
+Date: Mon, 13 Apr 2026 22:32:19 +0800
+Subject: [PATCH 3/4] =?UTF-8?q?=E4=BF=AE=E6=94=B9=20railway.json=20-=20?=
+ =?UTF-8?q?=E5=90=8E=E7=AB=AF=E5=90=AF=E5=8A=A8=E5=91=BD=E4=BB=A4=E8=AE=BE?=
+ =?UTF-8?q?=E7=BD=AE=E4=B8=BA=20python=20backend=5Fserver.py?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ railway.json | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/railway.json b/railway.json
+index 17aae2c..9c73cc8 100644
+--- a/railway.json
++++ b/railway.json
+@@ -5,12 +5,10 @@
+     "dockerfile": "./Dockerfile"
+   },
+   "deploy": {
+-    "startCommand": "streamlit run streamlit_app.py",
++    "startCommand": "python backend_server.py",
+     "restartPolicyMaxRetries": 5
+   },
+   "variables": {
+-    "STREAMLIT_SERVER_HEADLESS": "true",
+-    "STREAMLIT_SERVER_ADDRESS": "0.0.0.0",
+-    "STREAMLIT_SERVER_PORT": "8501"
++    "PYTHONUNBUFFERED": "1"
+   }
+ }
+-- 
+2.47.1.windows.1
+

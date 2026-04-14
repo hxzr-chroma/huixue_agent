@@ -1,0 +1,30 @@
+From 807b1a7fbf3da553c986a8f17b9a9ce0cd4f5236 Mon Sep 17 00:00:00 2001
+From: Your Name <your-email@example.com>
+Date: Mon, 13 Apr 2026 22:49:24 +0800
+Subject: [PATCH 4/4] =?UTF-8?q?Fix=20railway.json=20-=20=E7=A1=AE=E4=BF=9D?=
+ =?UTF-8?q?=E5=90=8E=E7=AB=AF=E5=90=AF=E5=8A=A8=E5=91=BD=E4=BB=A4=E6=AD=A3?=
+ =?UTF-8?q?=E7=A1=AE=E5=BA=94=E7=94=A8?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ railway.json | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/railway.json b/railway.json
+index 9c73cc8..d01d3a1 100644
+--- a/railway.json
++++ b/railway.json
+@@ -7,8 +7,5 @@
+   "deploy": {
+     "startCommand": "python backend_server.py",
+     "restartPolicyMaxRetries": 5
+-  },
+-  "variables": {
+-    "PYTHONUNBUFFERED": "1"
+   }
+ }
+-- 
+2.47.1.windows.1
+
