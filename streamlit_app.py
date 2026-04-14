@@ -1,21 +1,25 @@
-from __future__ import annotations
-
-import json
-import os
-from datetime import date
+"""
+AI 学习助手 - Streamlit版本（本地化 - 无需后端分离）
+直接部署在Streamlit Cloud
+"""
 
 import streamlit as st
+import os
+from datetime import date
+import json
+import sqlite3
+import hashlib
+from pathlib import Path
 
-# 加载.env文件中的环境变量
+# 加载环境变量
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    # 如果没有dotenv库，尝试手动设置API_KEY
     pass
 
-from services.schedule import calendar_date_for_plan_day, parse_iso_date
 from services.study_planner_service import StudyPlannerService
+from services.schedule import calendar_date_for_plan_day, parse_iso_date
 from utils.goal_validation import (
     FIELD_LABELS_ZH,
     goal_missing_fields_for_submission,
@@ -23,10 +27,13 @@ from utils.goal_validation import (
     validate_parsed_goal,
 )
 
+# ============================================================================
+# 常量配置
+# ============================================================================
+
 GOAL_CLARIFY_CREATE = "goal_clarify_create"
 GOAL_CLARIFY_RECREATE = "goal_clarify_recreate"
 
-# 侧边栏展示标签 → 内部页面名（逻辑分支不变）
 NAV_ITEMS: list[tuple[str, str]] = [
     ("🏠 首页总览", "首页总览"),
     ("✨ 学习计划生成", "学习计划生成"),
@@ -36,7 +43,6 @@ NAV_ITEMS: list[tuple[str, str]] = [
     ("🔄 动态调整", "动态调整"),
 ]
 
-
 st.set_page_config(
     page_title="AI 学习助手",
     page_icon="📘",
@@ -45,20 +51,59 @@ st.set_page_config(
 )
 
 API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DB_PATH = "study_assistant.db"
 
-# 后端 URL 配置：优先级 1. 环境变量 2. 开发环境的 localhost
-# 在 Railway 上应该通过环境变量设置为其他服务的 URL
-BACKEND_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+# ============================================================================
+# 本地数据库操作
+# ============================================================================
 
-# 如果是在 Railway 上且没有 .env 文件，尝试从直接环境变量读取
-if not API_KEY:
-    API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+def init_user_db():
+    """初始化用户表"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (id INTEGER PRIMARY KEY, username TEXT UNIQUE, 
+                  password TEXT, email TEXT)''')
+    conn.commit()
+    conn.close()
 
-# 同样尝试从环境变量读后端 URL
-if BACKEND_URL == "http://localhost:8000":
-    railway_backend = os.environ.get("API_BASE_URL") or os.environ.get("BACKEND_URL")
-    if railway_backend:
-        BACKEND_URL = railway_backend
+def hash_password(password: str) -> str:
+    """密码哈希"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_user(username: str, password: str) -> bool:
+    """验证用户"""
+    init_user_db()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT password FROM users WHERE username=?", (username,))
+    result = c.fetchone()
+    conn.close()
+    
+    if result:
+        return result[0] == hash_password(password)
+    return False
+
+def register_user(username: str, email: str, password: str) -> dict:
+    """注册用户"""
+    if len(username) < 3:
+        return {"error": "用户名至少3个字符"}
+    if len(password) < 6:
+        return {"error": "密码至少6个字符"}
+    
+    init_user_db()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    try:
+        c.execute("INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
+                  (username, email, hash_password(password)))
+        conn.commit()
+        return {"success": True, "message": "注册成功"}
+    except sqlite3.IntegrityError:
+        return {"error": "用户名已存在"}
+    finally:
+        conn.close()
 
 # ============================================================================
 # 会话状态初始化
@@ -66,359 +111,34 @@ if BACKEND_URL == "http://localhost:8000":
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-if "token" not in st.session_state:
-    st.session_state.token = None
-if "user_info" not in st.session_state:
-    st.session_state.user_info = None
+if "username" not in st.session_state:
+    st.session_state.username = None
 if "auth_mode" not in st.session_state:
-    st.session_state.auth_mode = "login"  # "login" 或 "register"
-
-# ============================================================================
-# 登录/注册功能
-# ============================================================================
-
-def api_request(method: str, endpoint: str, data: dict = None, headers: dict = None):
-    """发送HTTP请求到后端"""
-    import requests
-    url = f"{BACKEND_URL}{endpoint}"
-    try:
-        if method == "POST":
-            response = requests.post(url, json=data, headers=headers or {}, timeout=10)
-        elif method == "GET":
-            response = requests.get(url, headers=headers or {}, timeout=10)
-        else:
-            return {"error": f"不支持的方法: {method}"}
-        
-        if response.status_code < 300:
-            return response.json()
-        else:
-            error_text = response.text[:200]
-            return {"error": f"服务错误 ({response.status_code}): {error_text}"}
-    except requests.ConnectionError as e:
-        return {
-            "error": f"❌ 无法连接到后端服务\n\nBackend URL: {BACKEND_URL}\n\n"
-                    f"如果在 Railway 上部署，请在 Variables 中设置 API_BASE_URL 为你的后端服务 URL（例如 https://xxx-backend.railway.app）"
-        }
-    except requests.Timeout:
-        return {"error": "后端服务响应超时（10秒）"}
-    except Exception as e:
-        error_msg = str(e)[:100]
-        return {"error": f"请求失败: {error_msg}"}
-
-def register_user(username: str, email: str, password: str, password_confirm: str):
-    """注册新用户"""
-    if password != password_confirm:
-        return {"error": "两次输入的密码不一致"}
-    
-    response = api_request("POST", "/api/auth/register", {
-        "username": username,
-        "email": email,
-        "password": password,
-        "password_confirm": password_confirm
-    })
-    
-    if "error" in response:
-        return response
-    
-    # 注册成功，自动登录
-    st.session_state.logged_in = True
-    st.session_state.token = response.get("access_token")
-    st.session_state.user_info = {"username": username, "email": email}
-    return {"success": True, "message": "注册成功！"}
-
-def login_user(username: str, password: str):
-    """用户登录"""
-    response = api_request("POST", "/api/auth/login", {
-        "username": username,
-        "password": password
-    })
-    
-    if "error" in response:
-        return response
-    
-    st.session_state.logged_in = True
-    st.session_state.token = response.get("access_token")
-    st.session_state.user_info = {"username": username}
-    return {"success": True, "message": "登录成功！"}
-
-def logout_user():
-    """用户登出"""
-    st.session_state.logged_in = False
-    st.session_state.token = None
-    st.session_state.user_info = None
     st.session_state.auth_mode = "login"
-
-def show_auth_page():
-    """显示登录/注册页面"""
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
-        st.markdown("# 🎓 AI 学习助手")
-        st.markdown("---")
-        
-        # 标签页选择
-        tab1, tab2 = st.tabs(["📝 登录", "✏️ 注册"])
-        
-        with tab1:
-            st.subheader("用户登录")
-            username = st.text_input("用户名", key="login_username")
-            password = st.text_input("密码", type="password", key="login_password")
-            
-            if st.button("🔓 登录", use_container_width=True):
-                if not username or not password:
-                    st.error("❌ 用户名和密码不能为空")
-                else:
-                    result = login_user(username, password)
-                    if result.get("success"):
-                        st.success(f"✅ {result.get('message')}")
-                        st.rerun()
-                    else:
-                        error_msg = result.get('error', '登录失败')
-                        if "无法连接" in error_msg:
-                            st.error(error_msg)
-                            st.info("💡 **提示**：\n\n如果使用本地开发，请确保后端服务 (`python backend_server.py`) 已在 localhost:8000 运行。\n\n如果在 Railway 部署，请在 Railway Variables 中配置 `API_BASE_URL`（你的后端服务 URL）")
-                        else:
-                            st.error(f"❌ {error_msg}")
-        
-        with tab2:
-            st.subheader("用户注册")
-            reg_username = st.text_input("用户名 (至少3个字符)", key="reg_username")
-            reg_email = st.text_input("邮箱", key="reg_email")
-            reg_password = st.text_input("密码 (至少6个字符)", type="password", key="reg_password")
-            reg_password_confirm = st.text_input("确认密码", type="password", key="reg_password_confirm")
-            
-            if st.button("✅ 注册", use_container_width=True):
-                if not all([reg_username, reg_email, reg_password]):
-                    st.error("❌ 请填写所有字段")
-                elif len(reg_username) < 3:
-                    st.error("❌ 用户名至少3个字符")
-                elif len(reg_password) < 6:
-                    st.error("❌ 密码至少6个字符")
-                else:
-                    result = register_user(reg_username, reg_email, reg_password, reg_password_confirm)
-                    if result.get("success"):
-                        st.success(f"✅ {result.get('message')}")
-                        st.rerun()
-                    else:
-                        error_msg = result.get('error', '注册失败')
-                        if "无法连接" in error_msg:
-                            st.error(error_msg)
-                            st.info("💡 **提示**：\n\n如果使用本地开发，请确保后端服务 (`python backend_server.py`) 已在 localhost:8000 运行。\n\n如果在 Railway 部署，请在 Railway Variables 中配置 `API_BASE_URL`（你的后端服务 URL）")
-                        else:
-                            st.error(f"❌ {error_msg}")
-
-# 安全初始化服务，忽略LLM库初始化错误
-api_key_warning = None
-
-if not API_KEY or API_KEY.strip() == "":
-    api_key_warning = "⚠️ **DEEPSEEK_API_KEY 未设置**\n\n请在 Railway 项目中配置环境变量:\n1. 进入 Railway Dashboard\n2. 选择你的项目\n3. 进入 Variables 设置\n4. 添加 `DEEPSEEK_API_KEY` 变量\n5. 点击 Deploy 重新部署"
-
-try:
-    service = StudyPlannerService(api_key=API_KEY)
-except Exception as e:
-    # 如果初始化失败（例如OpenAI库问题），使用Mock服务
-    error_msg = str(e)[:150]
-    if "API_KEY" in error_msg or "未设置" in error_msg:
-        api_key_warning = "⚠️ **DEEPSEEK_API_KEY 未设置或为空**\n\n请在 Railway 项目中配置环境变量:\n1. 进入 Railway Dashboard\n2. 选择你的项目\n3. 进入 Variables 设置\n4. 添加 `DEEPSEEK_API_KEY` 变量\n5. 重新部署应用"
-    else:
-        api_key_warning = f"⚠️ 服务初始化失败: {error_msg}\n\n某些功能可能不可用。"
-    
-    # 创建一个空对象来避免崩溃
-    class MockRetriever:
-        def chunk_count(self):
-            return 0
-    
-    class MockService:
-        def __init__(self):
-            self.retriever = MockRetriever()
-        
-        def get_current_plan(self): 
-            return None
-        def parse_user_goal(self, goal): 
-            return {}
-        def goal_missing_fields(self, parsed, goal): 
-            return []
-        def create_plan(self, goal, plan_start_date=None, parsed_goal=None): 
-            return None, None
-        def get_schedule_snapshot(self, plan_id): 
-            return None
-        def record_progress(self, plan_id, data): 
-            return None
-        def generate_evaluation(self, plan_id): 
-            return None
-        def get_optimization_suggestion(self, plan_id): 
-            return None
-    
-    service = MockService()
-
 if "latest_generated_evaluation" not in st.session_state:
     st.session_state.latest_generated_evaluation = None
-if "api_key_warning_shown" not in st.session_state:
-    st.session_state.api_key_warning_shown = False
 
+# ============================================================================
+# 服务初始化
+# ============================================================================
 
-def handle_goal_clarification_flow(service: StudyPlannerService, state_key: str):
-    """
-    若 session 中存在待补充的结构化目标，则展示表单。
-    用户补充完整后执行 create_plan(parsed_goal=...) 并返回 (plan, rag)；否则返回 (None, None)。
-    """
-    pending = st.session_state.get(state_key)
-    if not pending:
-        return None, None
+api_key_warning = None
+if not API_KEY or API_KEY.strip() == "":
+    api_key_warning = "⚠️ **DEEPSEEK_API_KEY 未设置**\n\n请在Streamlit Cloud中设置环境变量"
+    service = None
+else:
+    try:
+        service = StudyPlannerService(api_key=API_KEY)
+    except Exception as e:
+        api_key_warning = f"⚠️ 服务初始化失败: {str(e)[:100]}"
+        service = None
 
-    parsed = pending["parsed_goal"]
-    missing = goal_missing_fields_for_submission(pending["user_input"], parsed)
-
-    if not missing:
-        st.session_state.pop(state_key, None)
-        with st.spinner("正在生成学习计划..."):
-            try:
-                return service.create_plan(
-                    pending["user_input"],
-                    plan_start_date=pending["plan_start"],
-                    parsed_goal=parsed,
-                )
-            except ValueError:
-                return None, None
-
-    st.warning("🧩 还缺几样信息～补全后就能生成计划啦。")
-    with st.expander("🔍 当前解析结果（可对照修改）", expanded=False):
-        st.json(parsed)
-
-    with st.form(f"goal_clarify_{state_key}"):
-        subject_val = duration_val = hours_val = topics_val = desc_val = None
-        if "subject" in missing:
-            subject_val = st.text_input(
-                FIELD_LABELS_ZH["subject"],
-                value=parsed.get("subject") or "",
-            )
-        if "duration_days" in missing:
-            d0 = int(parsed.get("duration_days") or 7)
-            d0 = max(1, min(365, d0))
-            duration_val = st.number_input(
-                FIELD_LABELS_ZH["duration_days"],
-                min_value=1,
-                max_value=365,
-                value=d0,
-                step=1,
-            )
-        if "daily_hours" in missing:
-            h0 = float(parsed.get("daily_hours") or 2.0)
-            h0 = max(0.5, min(24.0, h0))
-            hours_val = st.number_input(
-                FIELD_LABELS_ZH["daily_hours"],
-                min_value=0.5,
-                max_value=24.0,
-                value=h0,
-                step=0.5,
-            )
-        if "focus_topics" in missing:
-            topics = parsed.get("focus_topics") or []
-            topics_str = "、".join(topics) if topics else ""
-            topics_val = st.text_area(
-                FIELD_LABELS_ZH["focus_topics"] + "（每行一条，或用逗号、顿号分隔）",
-                value=topics_str,
-                height=100,
-            )
-        if "target_description" in missing:
-            desc_val = st.text_area(
-                FIELD_LABELS_ZH["target_description"],
-                value=parsed.get("target_description") or "",
-                height=80,
-            )
-        c1, c2 = st.columns(2)
-        with c1:
-            cancelled = st.form_submit_button("↩️ 取消", use_container_width=True)
-        with c2:
-            submitted = st.form_submit_button(
-                "✅ 补全并生成计划", type="primary", use_container_width=True
-            )
-
-    if cancelled:
-        st.session_state.pop(state_key, None)
-        st.rerun()
-
-    if submitted:
-        kw = {}
-        if "subject" in missing:
-            kw["subject"] = subject_val
-        if "duration_days" in missing and duration_val is not None:
-            kw["duration_days"] = int(duration_val)
-        if "daily_hours" in missing and hours_val is not None:
-            kw["daily_hours"] = float(hours_val)
-        if "focus_topics" in missing:
-            kw["focus_topics_text"] = topics_val
-        if "target_description" in missing:
-            kw["target_description"] = desc_val
-        merged = merge_goal_supplements(parsed, **kw)
-        still = validate_parsed_goal(merged)
-        if still:
-            st.session_state[state_key]["parsed_goal"] = merged
-            hint = "、".join(FIELD_LABELS_ZH[k] for k in still)
-            st.error(f"以下信息仍不完整或超出合理范围，请继续补充：{hint}")
-            st.rerun()
-        st.session_state.pop(state_key, None)
-        with st.spinner("正在生成学习计划..."):
-            try:
-                return service.create_plan(
-                    pending["user_input"],
-                    plan_start_date=pending["plan_start"],
-                    parsed_goal=merged,
-                )
-            except ValueError:
-                st.error("生成失败，请检查填写内容。")
-                return None, None
-
-    return None, None
-
-
-def show_plan_success(
-    plan,
-    plan_rag: str | None,
-    *,
-    show_parsed_json: bool = True,
-    success_message: str = "🎉 计划已保存。",
-):
-    st.success(success_message)
-    show_rag_snippets("📚 知识库参考片段（RAG）", plan_rag)
-    snap = service.get_schedule_snapshot(plan["id"])
-    render_plan(plan, snap)
-    if show_parsed_json:
-        with st.expander("🧾 结构化目标 JSON", expanded=False):
-            st.code(json.dumps(plan["parsed_goal"], ensure_ascii=False, indent=2), language="json")
-
-
-def show_rag_snippets(title: str, content: str | None):
-    """折叠展示本次 RAG 检索到的知识片段。"""
-    with st.expander(title, expanded=False):
-        text = (content or "").strip()
-        if text:
-            st.markdown(text)
-        else:
-            st.caption("暂无命中片段。可在 `data/knowledge/` 添加 .md / .txt 后重试。")
-
-
-def page_header(title: str, subtitle: str | None = None, icon: str = "✨"):
-    sub = (
-        f'<p class="hx-subtitle">{subtitle}</p>'
-        if subtitle
-        else ""
-    )
-    st.markdown(
-        f"""
-        <div class="hx-page-head">
-            <span class="hx-page-icon" aria-hidden="true">{icon}</span>
-            <div>
-                <h1 class="hx-page-title">{title}</h1>
-                {sub}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
+# ============================================================================
+# UI 函数
+# ============================================================================
 
 def inject_styles():
+    """注入CSS样式"""
     st.markdown(
         """
         <style>
@@ -433,9 +153,6 @@ def inject_styles():
             [data-testid="stSidebar"] {
                 background: #ffffff;
                 border-right: 1px solid #e8eaed;
-            }
-            [data-testid="stSidebar"] .block-container {
-                padding-top: 1.25rem;
             }
             #MainMenu {visibility: hidden;}
             footer {visibility: hidden;}
@@ -464,602 +181,267 @@ def inject_styles():
                 margin: 0.35rem 0 0 0;
                 line-height: 1.5;
             }
-            .hx-hero {
-                background: #fff;
-                border: 1px solid #e8eaed;
-                border-radius: 12px;
-                padding: 1.25rem 1.35rem;
-                margin-bottom: 1rem;
-            }
-            .hx-hero-title {
-                font-size: 1.25rem;
-                font-weight: 600;
-                color: #1a1a1a;
-                margin: 0 0 0.5rem 0;
-            }
-            .hx-hero-desc {
-                color: #5f6368;
-                font-size: 0.92rem;
-                line-height: 1.55;
-                margin: 0;
-            }
-            .hx-pill-row {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 0.5rem;
-                margin: 0.75rem 0 0 0;
-            }
-            .hx-pill {
-                display: inline-flex;
-                align-items: center;
-                gap: 0.35rem;
-                font-size: 0.8rem;
-                padding: 0.35rem 0.65rem;
-                border-radius: 999px;
-                background: #f1f3f4;
-                color: #3c4043;
-            }
-            .hx-card {
-                background: #fff;
-                border: 1px solid #e8eaed;
-                border-radius: 10px;
-                padding: 1rem 1.1rem;
-                margin-bottom: 0.65rem;
-            }
-            .hx-section-label {
-                font-size: 0.78rem;
-                font-weight: 600;
-                text-transform: uppercase;
-                letter-spacing: 0.04em;
-                color: #80868b;
-                margin: 1.1rem 0 0.5rem 0;
-            }
-            .hx-task-title {
-                font-weight: 600;
-                color: #202124;
-                font-size: 0.95rem;
-            }
-            .hx-task-meta {
-                color: #80868b;
-                font-size: 0.82rem;
-                margin-top: 0.25rem;
-            }
-            div[data-testid="stExpander"] details {
-                border: 1px solid #e8eaed !important;
-                border-radius: 10px !important;
-                background: #fff !important;
-            }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-
-def render_plan(plan_record, schedule_snapshot=None):
-    if not plan_record:
-        st.info("📭 暂无计划，请先去「学习计划生成」。")
-        return
-
-    plan_data = plan_record["plan_data"]
-    if schedule_snapshot:
-        with st.expander("📅 日历对齐", expanded=False):
-            st.caption(
-                f"起始 **{schedule_snapshot['plan_start_date']}** · 今日 **{schedule_snapshot['today_iso']}** · "
-                f"第 **{schedule_snapshot['current_plan_day']}** / {schedule_snapshot['max_plan_day']} 天"
-            )
-
-    st.markdown('<p class="hx-section-label">摘要</p>', unsafe_allow_html=True)
+def page_header(title: str, subtitle: str | None = None, icon: str = "✨"):
+    """页面标题"""
+    sub = f'<p class="hx-subtitle">{subtitle}</p>' if subtitle else ""
     st.markdown(
-        f'<div class="hx-card">{plan_data.get("summary", "暂无摘要")}</div>',
-        unsafe_allow_html=True,
-    )
-
-    c1, c2 = st.columns(2)
-    with c1:
-        with st.expander("🪜 阶段安排", expanded=False):
-            stages = plan_data.get("stages", [])
-            if stages:
-                for stage in stages:
-                    st.markdown(f"**{stage.get('name', '阶段')}** · {stage.get('days', '待定')}")
-                    focus_list = stage.get("focus", [])
-                    if focus_list:
-                        st.caption("重点：" + "、".join(focus_list))
-            else:
-                st.caption("暂无")
-
-    with c2:
-        with st.expander("🎯 里程碑", expanded=False):
-            milestones = plan_data.get("milestones", [])
-            if milestones:
-                for item in milestones:
-                    st.write(f"· {item}")
-            else:
-                st.caption("暂无")
-
-    daily_tasks = plan_data.get("daily_tasks", [])
-    n_tasks = len(daily_tasks)
-    start_d = None
-    if schedule_snapshot:
-        start_d = parse_iso_date(schedule_snapshot.get("plan_start_date"))
-
-    st.markdown(
-        f'<p class="hx-section-label">每日任务 · {n_tasks} 项</p>',
-        unsafe_allow_html=True,
-    )
-    if daily_tasks:
-        for task in daily_tasks:
-            day_n = task.get("day", "-")
-            cal_label = ""
-            if start_d is not None:
-                try:
-                    dn = int(day_n)
-                    if dn >= 1:
-                        cal_label = calendar_date_for_plan_day(start_d, dn).isoformat()
-                except (TypeError, ValueError):
-                    pass
-            line1 = f"Day {day_n}"
-            if cal_label:
-                line1 += f" · {cal_label}"
-            st.markdown(
-                f"""
-                <div class="hx-card">
-                    <div class="hx-task-title">{line1}</div>
-                    <div style="margin-top:0.35rem;color:#3c4043;font-size:0.9rem;">{task.get('task', '')}</div>
-                    <div class="hx-task-meta">⏱ 约 {task.get('estimated_hours', 0)} 小时</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    else:
-        st.caption("暂无每日任务。")
-
-
-def render_categorized_tasks(plan_record):
-    """显示按分类组织的任务（来自数据库）"""
-    if not plan_record:
-        return
-    
-    # 从plan_record中获取任务列表（假设plan_record包含tasks字段）
-    tasks = plan_record.get("tasks", [])
-    
-    if not tasks:
-        st.info("📭 暂无分类任务。")
-        return
-    
-    # 按分类组织任务
-    categories = {}
-    for task in tasks:
-        category = task.get("category") or "待分类"
-        if category not in categories:
-            categories[category] = []
-        categories[category].append(task)
-    
-    # 显示各分类下的任务
-    st.markdown('<p class="hx-section-label">分类任务 · %d 项</p>' % len(tasks), unsafe_allow_html=True)
-    
-    priority_order = {"high": 0, "medium": 1, "low": 2}
-    priority_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}
-    status_map = {"pending": "⏳ 未开始", "in_progress": "⏱️ 进行中", "completed": "✅ 完成"}
-    
-    for category in sorted(categories.keys()):
-        cat_tasks = categories[category]
-        # 按优先级排序
-        sorted_tasks = sorted(
-            cat_tasks,
-            key=lambda x: priority_order.get(x.get("priority"), 999)
-        )
-        
-        with st.expander(f"📂 {category} ({len(cat_tasks)})", expanded=True):
-            for task in sorted_tasks:
-                priority = task.get("priority", "low")
-                status = task.get("status", "pending")
-                deadline = task.get("deadline")
-                
-                # 任务标题和状态
-                emoji = priority_emoji.get(priority, "⚪")
-                status_text = status_map.get(status, status)
-                
-                col1, col2, col3 = st.columns([2, 1, 1])
-                with col1:
-                    st.markdown(f"**{emoji} {task.get('title', '无标题')}**")
-                    if deadline:
-                        st.caption(f"📅 截止: {deadline}")
-                with col2:
-                    st.caption(status_text)
-                with col3:
-                    priority_label = {"high": "高", "medium": "中", "low": "低"}.get(priority, priority)
-                    st.caption(f"优先级: {priority_label}")
-
-
-def render_sidebar(service, current_plan):
-    st.sidebar.markdown("### 📌 菜单")
-    labels = [pair[0] for pair in NAV_ITEMS]
-    picked = st.sidebar.radio(
-        "页面",
-        labels,
-        label_visibility="collapsed",
-    )
-    page = dict(NAV_ITEMS)[picked]
-
-    st.sidebar.divider()
-    st.sidebar.caption("⏰ 今日")
-    st.sidebar.markdown(f"**{date.today().isoformat()}**")
-    if current_plan:
-        snap = service.get_schedule_snapshot(current_plan["id"])
-        if snap:
-            st.sidebar.caption("📍 计划进度")
-            st.sidebar.markdown(f"第 **{snap['current_plan_day']}** 天")
-            if snap["needs_attention"]:
-                st.sidebar.error("⚠️ 有缺勤/未达标")
-            elif snap["today_tasks"]:
-                st.sidebar.success("✅ 今日有任务")
-            else:
-                st.sidebar.caption("今日无日序任务")
-
-    st.sidebar.divider()
-    st.sidebar.caption("状态")
-    if current_plan:
-        st.sidebar.markdown("计划：**已生成** ✓")
-        with st.sidebar.expander("技术信息", expanded=False):
-            st.caption(f"计划 ID `{current_plan['id']}`")
-            st.caption(f"知识库片段 {service.retriever.chunk_count()}")
-            st.caption("编排 · LangGraph")
-    else:
-        st.sidebar.markdown("计划：**未生成**")
-        with st.sidebar.expander("技术信息", expanded=False):
-            st.caption(f"知识库片段 {service.retriever.chunk_count()}")
-            st.caption("编排 · LangGraph")
-    return page
-
-
-def render_home(current_plan):
-    page_header(
-        "AI 学习助手",
-        "定计划 → 打卡 → 小测 → 按需调整，一条龙搞定学习节奏。",
-        icon="📘",
-    )
-    st.markdown(
-        """
-        <div class="hx-hero">
-            <p class="hx-hero-desc">
-                用自然语言说出目标，系统会帮你拆成可执行日程；记得常来记进度、做检测，偏了还能一键重排。
-            </p>
-            <div class="hx-pill-row">
-                <span class="hx-pill">✨ 智能计划</span>
-                <span class="hx-pill">📈 进度</span>
-                <span class="hx-pill">📝 小测</span>
-                <span class="hx-pill">🔄 调整</span>
+        f"""
+        <div class="hx-page-head">
+            <span class="hx-page-icon">{icon}</span>
+            <div>
+                <h1 class="hx-page-title">{title}</h1>
+                {sub}
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    if current_plan:
-        st.success("🌟 已有计划，去记进度或做个小测吧～")
-        snap = service.get_schedule_snapshot(current_plan["id"])
-        if snap and snap["needs_attention"]:
-            st.warning("🗓 有几天没打卡或完成率偏低，记得补录或去「动态调整」。")
-            with st.expander("缺勤 / 未达标日期", expanded=False):
-                if snap["missed_days"]:
-                    st.write("缺勤：", snap["missed_days"])
-                if snap["incomplete_days"]:
-                    st.write("未达标：", snap["incomplete_days"])
-        if snap and snap["today_tasks"]:
-            st.markdown('<p class="hx-section-label">今日任务</p>', unsafe_allow_html=True)
-            for t in snap["today_tasks"]:
-                st.markdown(
-                    f"""
-                    <div class="hx-card">
-                        <div class="hx-task-title">Day {t.get('day')}</div>
-                        <div style="margin-top:0.3rem;font-size:0.9rem;color:#3c4043;">{t.get('task', '')}</div>
-                        <div class="hx-task-meta">⏱ 约 {t.get('estimated_hours', 0)} 小时</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-        with st.expander("📋 展开完整计划", expanded=False):
-            render_plan(current_plan, snap)
-    else:
-        st.info("👋 还没有计划，去左侧「✨ 学习计划生成」写一句目标试试吧。")
+def show_auth_page():
+    """显示登录/注册页面"""
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.markdown("# 🎓 AI 学习助手")
+        st.markdown("---")
+        
+        tab1, tab2 = st.tabs(["📝 登录", "✏️ 注册"])
+        
+        with tab1:
+            st.subheader("用户登录")
+            username = st.text_input("用户名", key="login_username")
+            password = st.text_input("密码", type="password", key="login_password")
+            
+            if st.button("🔓 登录", use_container_width=True):
+                if username and password:
+                    if verify_user(username, password):
+                        st.session_state.logged_in = True
+                        st.session_state.username = username
+                        st.success("登录成功！")
+                        st.rerun()
+                    else:
+                        st.error("用户名或密码错误")
+                else:
+                    st.warning("请输入用户名和密码")
+        
+        with tab2:
+            st.subheader("用户注册")
+            reg_username = st.text_input("用户名 (至少3个字符)", key="reg_username")
+            reg_email = st.text_input("邮箱", key="reg_email")
+            reg_password = st.text_input("密码 (至少6个字符)", type="password", key="reg_password")
+            reg_password_confirm = st.text_input("确认密码", type="password", key="reg_password_confirm")
+            
+            if st.button("✅ 注册", use_container_width=True):
+                if reg_password != reg_password_confirm:
+                    st.error("两次密码不一致")
+                else:
+                    result = register_user(reg_username, reg_email, reg_password)
+                    if "error" in result:
+                        st.error(result["error"])
+                    else:
+                        st.success("注册成功！请登录")
 
+# ============================================================================
+# 页面渲染函数
+# ============================================================================
+
+def render_home(current_plan):
+    """首页"""
+    page_header("AI 学习助手", "定计划 → 打卡 → 小测 → 按需调整", "📘")
+    
+    if current_plan:
+        st.success("🌟 已有计划！")
+        if service:
+            try:
+                snap = service.get_schedule_snapshot(current_plan["id"])
+                if snap and snap.get("needs_attention"):
+                    st.warning("🗓 有几天没打卡，记得补录进度！")
+            except:
+                pass
+    else:
+        st.info("👋 还没有计划，去左侧「✨ 学习计划生成」创建一个吧")
 
 def render_create_plan():
-    page_header(
-        "学习计划生成",
-        "写清楚目标；缺信息时会自动让你补几笔，再生成计划。",
-        icon="✨",
-    )
-    with st.expander("💡 怎么用", expanded=False):
-        st.caption(
-            "选起始日 → 描述目标 → 点生成。若周期、每日时长或重点没说清，会出现补充表单。"
-        )
-
-    plan_done, rag_done = handle_goal_clarification_flow(service, GOAL_CLARIFY_CREATE)
-    if plan_done:
-        show_plan_success(plan_done, rag_done)
-
-    plan_start = st.date_input(
-        "📅 计划第 1 天（日历起点）",
-        value=date.today(),
-        help="Day 1、Day 2… 与真实日期对齐；用于今日任务与缺勤判断。",
-    )
+    """生成计划页面"""
+    page_header("学习计划生成", "描述您的学习目标，系统自动为您制定计划", "✨")
+    
+    if not service:
+        st.error("⚠️ 服务未初始化，无法生成计划")
+        return
+    
+    plan_start = st.date_input("📅 计划第1天", value=date.today())
     user_input = st.text_area(
         "🎯 学习目标（自然语言）",
         height=140,
-        placeholder="例：两周复习操作系统，每天 3 小时，重点进程与内存",
+        placeholder="例：两周复习操作系统，每天3小时，重点进程与内存"
     )
+    
     if st.button("🚀 生成并保存学习计划", type="primary", use_container_width=True):
         if not user_input.strip():
-            st.warning("请输入学习目标。")
+            st.warning("请输入学习目标")
         else:
-            parsed = service.parse_user_goal(user_input.strip())
-            if service.goal_missing_fields(parsed, user_input.strip()):
-                st.session_state[GOAL_CLARIFY_CREATE] = {
-                    "user_input": user_input.strip(),
-                    "plan_start": plan_start,
-                    "parsed_goal": parsed,
-                }
-                st.rerun()
-            else:
-                with st.spinner("正在解析需求并生成学习计划..."):
-                    plan, plan_rag = service.create_plan(
-                        user_input.strip(),
-                        plan_start_date=plan_start,
-                        parsed_goal=parsed,
-                    )
-                if plan:
-                    show_plan_success(plan, plan_rag)
-                else:
-                    st.error("学习计划生成失败，请检查网络或稍后重试。")
-
+            with st.spinner("正在生成计划..."):
+                try:
+                    parsed = service.parse_user_goal(user_input.strip())
+                    missing = service.goal_missing_fields(parsed, user_input.strip())
+                    
+                    if not missing:
+                        plan = service.create_plan(
+                            user_input.strip(),
+                            plan_start_date=plan_start.isoformat(),
+                            parsed_goal=parsed
+                        )
+                        if plan:
+                            st.success("🎉 计划已生成！")
+                            st.json(plan)
+                        else:
+                            st.error("计划生成失败")
+                    else:
+                        st.warning(f"缺少信息：{', '.join(missing)}")
+                except Exception as e:
+                    st.error(f"错误：{str(e)}")
 
 def render_current_plan(current_plan):
-    page_header("当前学习计划", "查看日程；需要重来时在下方展开。", icon="📋")
+    """当前计划页面"""
+    page_header("当前学习计划", "查看您的学习日程", "📋")
+    
     if not current_plan:
-        st.info("还没有计划，请先去「学习计划生成」。")
+        st.info("还没有计划，请先去「学习计划生成」创建计划")
         return
-    snap = service.get_schedule_snapshot(current_plan["id"])
     
-    # 创建选项卡：日程视图 vs 分类任务
-    tab1, tab2 = st.tabs(["📅 日程", "📂 分类任务"])
+    plan_data = current_plan.get("plan_data", {})
+    st.markdown("**摘要**")
+    st.markdown(plan_data.get("summary", "暂无摘要"))
     
-    with tab1:
-        render_plan(current_plan, snap)
-    
-    with tab2:
-        render_categorized_tasks(current_plan)
-    
-    with st.expander("🔁 重新制定学习计划"):
-        plan_done, rag_done = handle_goal_clarification_flow(service, GOAL_CLARIFY_RECREATE)
-        if plan_done:
-            show_plan_success(
-                plan_done,
-                rag_done,
-                show_parsed_json=False,
-                success_message="🎉 新计划已保存。",
-            )
-
-        existing_start = parse_iso_date(current_plan.get("plan_start_date")) or date.today()
-        plan_start = st.date_input("📅 新计划第 1 天", value=existing_start)
-        user_input = st.text_area(
-            "🎯 新的学习目标",
-            height=110,
-            placeholder="例：一周复习数据结构，每天 2 小时，重点树与图",
-        )
-        if st.button("🚀 重新生成计划", use_container_width=True):
-            if not user_input.strip():
-                st.warning("请输入新的学习目标。")
-            else:
-                parsed = service.parse_user_goal(user_input.strip())
-                if service.goal_missing_fields(parsed, user_input.strip()):
-                    st.session_state[GOAL_CLARIFY_RECREATE] = {
-                        "user_input": user_input.strip(),
-                        "plan_start": plan_start,
-                        "parsed_goal": parsed,
-                    }
-                    st.rerun()
-                else:
-                    with st.spinner("正在解析需求并生成新的学习计划..."):
-                        plan, plan_rag = service.create_plan(
-                            user_input.strip(),
-                            plan_start_date=plan_start,
-                            parsed_goal=parsed,
-                        )
-                    if plan:
-                        show_plan_success(
-                            plan,
-                            plan_rag,
-                            show_parsed_json=False,
-                            success_message="🎉 新计划已保存。",
-                        )
-                    else:
-                        st.error("生成失败，请稍后重试。")
-
+    st.markdown("**每日任务**")
+    daily_tasks = plan_data.get("daily_tasks", [])
+    if daily_tasks:
+        for task in daily_tasks[:5]:
+            st.markdown(f"- **Day {task.get('day')}**: {task.get('task')} (~{task.get('estimated_hours')}h)")
+    else:
+        st.caption("暂无任务")
 
 def render_progress(current_plan):
-    page_header("学习进度反馈", "记一笔今天学了多少，系统会顺手出反馈和小测题。", icon="📈")
+    """进度反馈页面"""
+    page_header("学习进度反馈", "记录今日学习情况", "📈")
+    
     if not current_plan:
-        st.info("请先生成计划。")
+        st.info("请先生成计划")
         return
-
-    snap = service.get_schedule_snapshot(current_plan["id"])
-    if snap:
-        with st.expander("📌 今日对齐信息", expanded=False):
-            st.caption(
-                f"{snap['today_iso']} · 起始 {snap['plan_start_date']} · "
-                f"计划第 **{snap['current_plan_day']}** 天"
-            )
-            if snap["today_tasks"]:
-                for t in snap["today_tasks"]:
-                    st.write(f"· Day {t.get('day')}：{t.get('task', '')}（~{t.get('estimated_hours', 0)}h）")
-        if snap["needs_attention"]:
-            st.warning("有缺勤或某天完成率低于 50%，可改日期补录或去「动态调整」。")
-
+    
+    if not service:
+        st.error("服务未初始化")
+        return
+    
     col1, col2 = st.columns([1.1, 1])
     with col1:
-        record_date = st.date_input(
-            "📅 进度日期",
-            value=date.today(),
-            help="补录昨天请改选日期。",
-        )
+        record_date = st.date_input("📅 进度日期", value=date.today())
         completion_ratio = st.slider("✅ 当日完成度 (%)", 0, 100, 60)
         completed_tasks = st.text_area("✔️ 已完成", placeholder="今天搞定了什么")
-        pending_tasks = st.text_area("⏳ 未完成", placeholder="还剩什么")
+    
     with col2:
-        delay_reason = st.text_input("🤔 偏差原因（可选）", placeholder="时间不够 / 其他课挤占…")
-        note = st.text_area("💭 备注（可选）", height=160, placeholder="随手记两句")
-
-    if st.button("📤 提交进度并生成反馈", type="primary", use_container_width=True):
+        note = st.text_area("💭 备注", height=120, placeholder="随手记两句")
+    
+    if st.button("📤 提交进度", type="primary", use_container_width=True):
         progress_data = {
             "study_date": record_date.isoformat(),
             "completion_ratio": completion_ratio,
             "completed_tasks": completed_tasks,
-            "pending_tasks": pending_tasks,
-            "delay_reason": delay_reason,
             "note": note,
         }
-        latest = service.record_progress(current_plan["id"], progress_data)
-        generated_evaluation = service.generate_evaluation(current_plan["id"])
-        st.session_state.latest_generated_evaluation = generated_evaluation
-        if latest:
-            st.success("📝 已记下～")
-            with st.expander("📊 反馈详情", expanded=False):
-                st.json(latest["feedback"])
-            if generated_evaluation:
-                show_rag_snippets(
-                    "📚 出题参考（RAG）",
-                    generated_evaluation.get("rag_context"),
-                )
-                st.info("🎯 检测题已备好，去「📝 学习检测」答题吧。")
-        else:
-            st.error("学习进度记录失败，请稍后重试。")
-
+        try:
+            latest = service.record_progress(current_plan["id"], progress_data)
+            if latest:
+                st.success("📝 已记下进度！")
+            else:
+                st.error("记录失败")
+        except Exception as e:
+            st.error(f"错误：{str(e)}")
 
 def render_evaluation(current_plan):
-    page_header("学习检测", "先记进度才会出题；答完保存结果。", icon="📝")
+    """学习检测页面"""
+    page_header("学习检测", "先记进度才会出题", "📝")
+    
     if not current_plan:
-        st.info("请先生成计划。")
+        st.info("请先生成计划")
         return
-
-    latest_generated_evaluation = st.session_state.latest_generated_evaluation
-    latest_saved_evaluation = service.get_latest_evaluation(current_plan["id"])
-
-    if latest_generated_evaluation:
-        if latest_generated_evaluation.get("focus_summary"):
-            st.caption(f"🎯 {latest_generated_evaluation.get('focus_summary', '')}")
-        show_rag_snippets(
-            "📚 出题参考（RAG）",
-            latest_generated_evaluation.get("rag_context"),
-        )
-        st.markdown('<p class="hx-section-label">题目</p>', unsafe_allow_html=True)
-        for question in latest_generated_evaluation.get("questions", []):
-            st.markdown(
-                f"""
-                <div class="hx-card">
-                    <div class="hx-task-title">{question.get('id', '-')} · {question.get('type', '题')}</div>
-                    <div style="margin-top:0.4rem;font-size:0.92rem;color:#202124;">{question.get('question', '')}</div>
-                    <div class="hx-task-meta">考点：{question.get('check_point', '')}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        total_questions = len(latest_generated_evaluation.get("questions", []))
-        score = st.number_input(
-            "✅ 答对几题？",
-            min_value=0,
-            max_value=max(total_questions, 1),
-            value=0,
-            step=1,
-        )
-        user_answers = st.text_area("✏️ 答题简述（可选）", placeholder="一两句思路即可")
-        evaluation_summary = st.text_area("🪞 自我总结（可选）", placeholder="哪里卡住了？")
-
-        if st.button("💾 提交检测结果", type="primary", use_container_width=True):
-            saved_evaluation = service.save_evaluation_result(
-                current_plan["id"],
-                score=score,
-                total_questions=total_questions,
-                user_answers=user_answers,
-                summary=evaluation_summary,
-                questions=latest_generated_evaluation.get("questions", []),
-            )
-            if saved_evaluation:
-                st.success("🎉 已保存")
-                with st.expander("📊 结果详情", expanded=False):
-                    st.json(saved_evaluation)
-    elif latest_saved_evaluation:
-        st.success("📂 已有最近一次检测结果")
-        with st.expander("📊 查看详情", expanded=False):
-            st.json(latest_saved_evaluation)
-    else:
-        st.info("请先去「📈 学习进度反馈」提交一次进度。")
-
+    
+    st.info("请先在「学习进度反馈」中记录进度，系统会自动生成题目")
 
 def render_adjustment(current_plan):
-    page_header("动态调整", "结合进度、小测和日历，重排后面的任务。", icon="🔄")
+    """动态调整页面"""
+    page_header("动态调整", "根据进度重新安排任务", "🔄")
+    
     if not current_plan:
-        st.info("请先生成计划。")
+        st.info("请先生成计划")
         return
-
-    snap = service.get_schedule_snapshot(current_plan["id"])
-    if snap and snap["needs_attention"]:
-        with st.expander("ℹ️ 关于缺勤时如何调整", expanded=False):
-            st.caption(
-                "有日历缺勤/未达标时，即使没有进度记录也可尝试调整；若有进度，会把日历摘要一并交给优化。"
-            )
-
-    st.caption("点按钮后，会刷新后续每日任务（原逻辑不变）。")
+    
+    if not service:
+        st.error("服务未初始化")
+        return
+    
+    st.info("系统会根据您的学习进度，智能调整后续任务")
+    
     if st.button("⚡ 生成调整建议", type="primary", use_container_width=True):
-        result = service.adjust_plan(current_plan["id"])
-        if not result:
-            st.warning("需要先至少一条进度记录（或满足日历缺勤时的合成条件）。")
-        else:
-            st.success("✨ 已更新计划")
-            with st.expander("📊 调整说明（JSON）", expanded=False):
-                st.json(result["adjustment"])
-            st.markdown('<p class="hx-section-label">调整后日程</p>', unsafe_allow_html=True)
-            ns = service.get_schedule_snapshot(result["updated_plan"]["id"])
-            render_plan(result["updated_plan"], ns)
-
+        with st.spinner("分析中..."):
+            try:
+                result = service.adjust_plan(current_plan["id"])
+                if result:
+                    st.success("✅ 已重新调整！")
+                else:
+                    st.warning("暂无调整建议")
+            except Exception as e:
+                st.error(f"错误：{str(e)}")
 
 # ============================================================================
-# 应用主函数
+# 主程序
 # ============================================================================
 
 def main():
     inject_styles()
     
-    # 检查用户是否已登录
+    # 检查登录状态
     if not st.session_state.logged_in:
         show_auth_page()
         return
     
-    # 用户已登录，显示主应用
-    # 顶部显示当前登录用户信息
+    # 用户已登录
     col1, col2, col3 = st.columns([3, 1, 1])
     with col3:
-        username = st.session_state.user_info.get("username", "用户")
-        if st.button(f"👤 {username} 退出", use_container_width=True):
-            logout_user()
+        if st.button("👤 退出"):
+            st.session_state.logged_in = False
+            st.session_state.username = None
             st.rerun()
     
     st.divider()
     
-    # 显示 API_KEY 警告（只显示一次）
-    if api_key_warning and not st.session_state.api_key_warning_shown:
+    # 显示API KEY警告
+    if api_key_warning:
         st.error(api_key_warning)
-        st.session_state.api_key_warning_shown = True
     
-    current_plan = service.get_current_plan()
-    page = render_sidebar(service, current_plan)
-
-    if page != "学习计划生成":
-        st.session_state.pop(GOAL_CLARIFY_CREATE, None)
-    if page != "当前学习计划":
-        st.session_state.pop(GOAL_CLARIFY_RECREATE, None)
-
+    # 获取当前计划
+    current_plan = None
+    if service:
+        try:
+            current_plan = service.get_current_plan()
+        except:
+            pass
+    
+    # 侧边栏导航
+    st.sidebar.markdown("### 📌 菜单")
+    labels = [pair[0] for pair in NAV_ITEMS]
+    picked = st.sidebar.radio("页面", labels, label_visibility="collapsed")
+    page = dict(NAV_ITEMS)[picked]
+    
+    st.sidebar.divider()
+    st.sidebar.markdown(f"**用户**: {st.session_state.username}")
+    
+    # 页面路由
     if page == "首页总览":
         render_home(current_plan)
     elif page == "学习计划生成":
