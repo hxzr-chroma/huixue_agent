@@ -48,7 +48,7 @@ class LLMClient:
         普通对话调用
         """
         if self.client is None:
-            return "❌ API_KEY 未设置。请在 Railway 项目设置中添加 DEEPSEEK_API_KEY 环境变量。"
+            return "❌ API_KEY 未设置。请在 Streamlit Cloud 的 Settings → Secrets 中添加 DEEPSEEK_API_KEY 环境变量。"
         
         try:
             response = self.client.chat.completions.create(
