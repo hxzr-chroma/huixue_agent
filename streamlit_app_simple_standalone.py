@@ -1,5 +1,4 @@
-"""
-AI 学习助手 - Streamlit独立版本
+"""AI 学习助手 - Streamlit独立版本
 纯Streamlit实现，无需后端依赖
 可直接运行: streamlit run streamlit_app_simple_standalone.py
 """
