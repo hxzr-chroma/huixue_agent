@@ -22,7 +22,9 @@ class LLMClient:
         if not api_key or api_key.strip() == "":
             # 不抛出错误，而是记录警告并继续
             import warnings
-            warnings.warn("⚠️ DEEPSEEK_API_KEY 未设置，某些功能将不可用。请在 Railway 环境变量中设置 DEEPSEEK_API_KEY")
+            warnings.warn("⚠️ DEEPSEEK_API_KEY 未设置，某些功能将不可用。\n" +
+                         "• 本地开发：创建 .streamlit/secrets.toml 文件\n" +
+                         "• Streamlit Cloud：Settings → Secrets 中添加 DEEPSEEK_API_KEY")
             self.client = None
             self.model = "deepseek-chat"
             return
