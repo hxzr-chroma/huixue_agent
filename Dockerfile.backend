@@ -14,5 +14,9 @@ COPY . .
 # 暴露端口
 EXPOSE 8000
 
+# 复制启动脚本
+COPY start_backend.sh /app/start_backend.sh
+RUN chmod +x /app/start_backend.sh
+
 # 启动FastAPI后端
-CMD ["uvicorn", "backend_server:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/start_backend.sh"]
