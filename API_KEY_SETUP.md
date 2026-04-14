@@ -36,7 +36,7 @@ git status
 #### 2.3 配置应用
 
 在弹窗中选择：
-- **Repository**: `15944156521/huixue_agent`
+- **Repository**: `hxzr-chroma/huixue_agent`
 - **Branch**: `main`
 - **Main file path**: `streamlit_app_simple.py`
 

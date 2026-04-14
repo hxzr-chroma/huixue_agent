@@ -312,7 +312,7 @@ A: 可以。SQLite 支持所有标准的 SQL 操作。
 3. **在线资源**
    - [Streamlit 官方文档](https://docs.streamlit.io)
    - [Streamlit Cloud 常见问题](https://docs.streamlit.io/streamlit-cloud/get-started)
-   - [GitHub Issues](https://github.com/15944156521/huixue_agent/issues)
+   - [GitHub Issues](https://github.com/hxzr-chroma/huixue_agent/issues)
 
 ---
 

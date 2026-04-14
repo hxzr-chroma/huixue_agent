@@ -79,7 +79,7 @@ git push origin main
 1. 访问 https://share.streamlit.io
 2. 点击 「New app」
 3. 选择：
-   - **Repository**: `15944156521/huixue_agent`
+   - **Repository**: `hxzr-chroma/huixue_agent`
    - **Branch**: `main`
    - **Main file path**: `streamlit_app_simple.py`
 4. 点击「Deploy」

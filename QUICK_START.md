@@ -53,7 +53,7 @@ git push origin main
 2. **点击** 「New app」
 
 3. **填写**：
-   - Repository: `15944156521/huixue_agent`
+   - Repository: `hxzr-chroma/huixue_agent`
    - Branch: `main`
    - Main file path: `streamlit_app_simple.py`
 
