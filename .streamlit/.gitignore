@@ -1,0 +1,4 @@
+# Streamlit 秘钥文件，不要上传到 Git
+secrets.toml
+*.db
+.env

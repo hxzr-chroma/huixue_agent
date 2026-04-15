@@ -1,0 +1,40 @@
+From 9b6e6cd3acf865c261ab0f9c648daf653c1bfff1 Mon Sep 17 00:00:00 2001
+From: Your Name <your-email@example.com>
+Date: Tue, 14 Apr 2026 12:35:35 +0800
+Subject: [PATCH] =?UTF-8?q?=E5=88=A0=E9=99=A4=20railway.json=20-=20?=
+ =?UTF-8?q?=E4=BD=BF=E7=94=A8=20Dockerfile=20=E7=BB=9F=E4=B8=80=E9=85=8D?=
+ =?UTF-8?q?=E7=BD=AE?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ railway.json | 16 ----------------
+ 1 file changed, 16 deletions(-)
+ delete mode 100644 railway.json
+
+diff --git a/railway.json b/railway.json
+deleted file mode 100644
+index 17aae2c..0000000
+--- a/railway.json
++++ /dev/null
+@@ -1,16 +0,0 @@
+-{
+-  "$schema": "https://railway.app/railway.schema.json",
+-  "build": {
+-    "builder": "dockerfile",
+-    "dockerfile": "./Dockerfile"
+-  },
+-  "deploy": {
+-    "startCommand": "streamlit run streamlit_app.py",
+-    "restartPolicyMaxRetries": 5
+-  },
+-  "variables": {
+-    "STREAMLIT_SERVER_HEADLESS": "true",
+-    "STREAMLIT_SERVER_ADDRESS": "0.0.0.0",
+-    "STREAMLIT_SERVER_PORT": "8501"
+-  }
+-}
+-- 
+2.47.1.windows.1
+
