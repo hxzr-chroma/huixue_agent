@@ -250,6 +250,82 @@ class StudyRepository:
             "created_at": row["created_at"],
         }
 
+    def save_conversation(self, plan_id, user_id, user_message, assistant_response, message_type="clarification", context=None):
+        """保存多轮对话"""
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO conversation_history (
+                    plan_id, user_id, user_message, assistant_response, message_type, context_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    plan_id,
+                    user_id,
+                    user_message,
+                    assistant_response,
+                    message_type,
+                    json.dumps(context, ensure_ascii=False) if context else None,
+                ),
+            )
+            return cursor.lastrowid
+
+    def get_conversation_history(self, plan_id, limit=50):
+        """获取某个计划的对话历史"""
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM conversation_history
+                WHERE plan_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (plan_id, limit),
+            )
+            rows = cursor.fetchall()
+            return [self._row_to_conversation_dict(r) for r in reversed(rows)]
+
+    def get_user_conversation_history(self, user_id, plan_id=None, limit=100):
+        """获取用户的所有对话（可选按计划过滤）"""
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            if plan_id:
+                cursor.execute(
+                    """
+                    SELECT * FROM conversation_history
+                    WHERE user_id = ? AND plan_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (user_id, plan_id, limit),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT * FROM conversation_history
+                    WHERE user_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (user_id, limit),
+                )
+            rows = cursor.fetchall()
+            return [self._row_to_conversation_dict(r) for r in reversed(rows)]
+
+    def _row_to_conversation_dict(self, row):
+        return {
+            "id": row["id"],
+            "plan_id": row["plan_id"],
+            "user_id": row["user_id"],
+            "user_message": row["user_message"],
+            "assistant_response": row["assistant_response"],
+            "message_type": row["message_type"],
+            "context": json.loads(row["context_json"]) if row["context_json"] else None,
+            "created_at": row["created_at"],
+        }
+
     def _row_to_evaluation_dict(self, row):
         return {
             "id": row["id"],

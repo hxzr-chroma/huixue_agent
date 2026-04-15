@@ -114,6 +114,23 @@ def init_db():
 
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS conversation_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                user_message TEXT NOT NULL,
+                assistant_response TEXT NOT NULL,
+                message_type TEXT DEFAULT 'clarification',
+                context_json TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (plan_id) REFERENCES study_plans(id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """
+        )
+
+        cursor.execute(
+            """
             INSERT OR IGNORE INTO users (id, username)
             VALUES (1, 'default_user')
             """

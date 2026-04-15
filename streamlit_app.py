@@ -31,6 +31,7 @@ NAV_ITEMS: list[tuple[str, str]] = [
     ("📈 学习进度反馈", "学习进度反馈"),
     ("📝 学习检测", "学习检测"),
     ("🔄 动态调整", "动态调整"),
+    ("💬 多轮对话", "多轮对话"),
 ]
 
 
@@ -506,6 +507,61 @@ def render_adjustment(service, current_plan):
             render_plan(result["updated_plan"], ns)
 
 
+def render_multi_turn_dialog(service, current_plan, repo):
+    """多轮对话页面"""
+    st.markdown("# 💬 多轮对话与记忆")
+    st.markdown("与AI助手进行多轮对话，系统会记住你的所有问题和回答。")
+    
+    if not current_plan:
+        st.info("请先生成计划。")
+        return
+
+    # 加载对话历史
+    history = repo.get_conversation_history(current_plan["id"], limit=50)
+    
+    # 显示对话历史
+    if history:
+        st.markdown("### 📝 对话记录")
+        for msg in history:
+            with st.chat_message("user"):
+                st.write(msg["user_message"])
+            with st.chat_message("assistant"):
+                st.write(msg["assistant_response"])
+                st.caption(f"类型: {msg['message_type']} | {msg['created_at']}")
+    else:
+        st.info("暂无对话记录，开始提问吧！")
+    
+    # 对话输入框
+    st.markdown("### 💭 提问")
+    user_input = st.text_area("你的问题或补充信息", placeholder="例如：我进度有点慢，能调整计划吗？")
+    
+    if st.button("📤 发送", type="primary", use_container_width=True):
+        if user_input.strip():
+            # 由LLM生成回复
+            prompt = f"""用户关于学习计划有个提问或补充。
+
+当前计划：{current_plan.get('plan_name', '学习计划')}
+用户消息：{user_input}
+
+请给出有帮助的回复。""" 
+            
+            try:
+                response = service.llm.call(prompt)
+                # 保存对话
+                repo.save_conversation(
+                    plan_id=current_plan["id"],
+                    user_id=st.session_state.user_id,
+                    user_message=user_input,
+                    assistant_response=response,
+                    message_type="补充咨询",
+                    context={"plan_id": current_plan["id"]}
+                )
+                st.success("✅ 已保存")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 出错: {e}")
+
+
 # ========== 主程序 ==========
 initialize_app()
 check_login()
@@ -592,3 +648,6 @@ elif page == "学习检测":
 
 elif page == "动态调整":
     render_adjustment(service, current_plan)
+
+elif page == "多轮对话":
+    render_multi_turn_dialog(service, current_plan, repo)
